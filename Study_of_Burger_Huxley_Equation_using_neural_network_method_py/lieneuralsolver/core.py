@@ -1,20 +1,18 @@
+# Importing the necessary packages
 import autograd.numpy as np
 from autograd import grad
 from autograd import elementwise_grad as egrad
-
-
 import autograd.numpy.random as npr
 from autograd.misc.flatten import flatten
-
 from scipy.optimize import minimize
 from scipy.integrate import solve_ivp
-
 from matplotlib import pyplot as plt
 
-# TODO: Can we improve this dirty hack?
+
+#
 count = 0
 
-
+# Initialize neural network parameters
 def init_weights(n_in=1, n_hidden=10, n_out=1):
     W1 = npr.randn(n_in, n_hidden)
     b1 = np.zeros(n_hidden)
@@ -23,48 +21,46 @@ def init_weights(n_in=1, n_hidden=10, n_out=1):
     params = [W1, b1, W2, b2]
     return params
 
-
+# Construct \hat{u}_1 neural network solution
 def predict1(params, t, act=np.tanh):
     W1, b1, W2, b2 = params
-
     a = act(np.dot(t, W1) + b1)
     out = np.dot(a, W2) + b2
     y0_1lie = -(1/12)*np.exp(t/2)*(-7+np.exp((3*t)/2))
-    # Huxley equation   (3/4)-(1/4)*np.exp(-t/sqrt(2))
-    # Burger_Huxley_Equation  (1/12)*(7-np.exp((3*t)/2))
-    # Burger_Fisher Equation  -(1/12)*np.exp(t/2)*(-7+np.exp((3*t)/2))
+    # Huxley equation   (3/4)-(1/4)*np.exp(-t/sqrt(2))                  # D_1 relative solution \bar{u}_{1}
+    # Burger_Huxley_Equation  (1/12)*(7-np.exp((3*t)/2))                # D_1 relative solution \bar{u}_{1}
+    # Burger_Fisher Equation  -(1/12)*np.exp(t/2)*(-7+np.exp((3*t)/2))  # D_1 relative solution \bar{u}_{1}
     y = y0_1lie + t*out
     return y
 
+# Construct \hat{u}_2 neural network solution
 def predict2(params, t, act=np.tanh):
     W1, b1, W2, b2 = params
-
     a = act(np.dot(t, W1) + b1)
     out = np.dot(a, W2) + b2
     y0_2lie = ((1/24)*(7*np.exp(t/2)))-((np.exp(2*t))/6)
-    # Huxley equation   (np.exp(-t/sqrt(2)))/(4*sqrt(2))
-    # Burger_Huxley_Equation  -(1/8)*(np.exp((3*t)/2))
-    # Burger_Fisher Equation  ((1/24)*(7*np.exp(t/2)))-((np.exp(2*t))/6)
+    # Huxley equation   (np.exp(-t/sqrt(2)))/(4*sqrt(2))                   # D_1 relative solution \bar{u}_{2}
+    # Burger_Huxley_Equation  -(1/8)*(np.exp((3*t)/2))                     # D_1 relative solution \bar{u}_{2}
+    # Burger_Fisher Equation  ((1/24)*(7*np.exp(t/2)))-((np.exp(2*t))/6)   # D_1 relative solution \bar{u}_{2}
     y = y0_2lie + t*out
     return y
 
+# Ignore predict3, used when the number of equations is 3.
 def predict3(params, t, act=np.tanh):
     W1, b1, W2, b2 = params
-
     a = act(np.dot(t, W1) + b1)
     out = np.dot(a, W2) + b2
     y0_3lie = -4*np.cos(2*t)
     y = y0_3lie + t*out
     return y
 
-predict1_dt = egrad(predict1, argnum=1)
+predict1_dt = egrad(predict1, argnum=1)   #\hat{u}_1/dt   t is \xi
 
-predict2_dt = egrad(predict2, argnum=1)
+predict2_dt = egrad(predict2, argnum=1)   #\hat{u}_2/dt   t is \xi
 
-predict3_dt = egrad(predict3, argnum=1)
+predict3_dt = egrad(predict3, argnum=1)   #igone
 
-
-
+# NNSolver
 class NNSolver(object):
     def __init__(self, f, t, y0_list, n_hidden=10):
         Nvar = len(y0_list)
@@ -82,24 +78,24 @@ class NNSolver(object):
 
     def __str__(self):
         return ('Neural ODE Solver \n'
-                'Number of equations:       {} \n'
-                'Initial condition y0:      {} \n'
-                'Numnber of hidden units:   {} \n'
-                'Number of training points: {} '
+                'Number of equations:       {} \n'      # Number of output equations
+                'Initial condition y0:      {} \n'      # initial values
+                'Numnber of hidden units:   {} \n'      # number of neurons in the hidden layer
+                'Number of training points: {} '        # number of training points
                 .format(self.Nvar, self.y0_list, self.n_hidden, self.t.size)
                 )
 
     def __repr__(self):
         return self.__str__()
 
-    def reset_weights(self):
+    def reset_weights(self):  # Resetting neural network parameters
         self.params_list = [init_weights(n_hidden=self.n_hidden)
                             for _ in range(self.Nvar)]
         flattened_params, unflat_func = flatten(self.params_list)
         self.flattened_params = flattened_params
         self.unflat_func = unflat_func
 
-    def loss_func(self, params_list):
+    def loss_func(self, params_list):  # Define the loss function
         y0_list = self.y0_list
         t = self.t
         f = self.f
@@ -117,21 +113,25 @@ class NNSolver(object):
 
         loss_total = 0.0
         for f_pred, dydt_pred in zip(f_pred_list, dydt_pred_list):
-            pre_1= predict1(params_list[0], -5).flatten()
-            pre_2= predict2(params_list[1], -5).flatten()
-            loss = np.mean((dydt_pred-f_pred)**2)+(1/2)*(pre_1-0.0758582)**2+(1/2)*(pre_2-0.0350519)**2
+            pre_1= predict1(params_list[0], -5).flatten()    #L_I of \hat{u}_1
+            pre_2= predict2(params_list[1], -5).flatten()    #L_I of \hat{u}_2
+            loss = np.mean((dydt_pred-f_pred)**2)+(1/2)*(pre_1-0.0758582)**2+(1/2)*(pre_2-0.0350519)**2  #L_total
+            loss_total += loss
         return loss_total
 
+# Give the definition of the loss function for the following equation
     # Burger Huxley Equation(-5)  +(1/2)*(predict1(params_list[0], -5)-0.924142)**2+(1/2)*(predict2(params_list[1], -5)+0.0350519)**2
     # Burger Huxley Equation(-5)  np.mean((dydt_pred-f_pred)**2)+(1/2)*(pre_1-0.924142)**2+(1/2)*(pre_2+0.0350519)**2
     # Burger Fisher Equation (-5) +(1/2)*(pre_1-0.0758582)**2+(1/2)*(pre_2-0.0350519)**2
     # Burger Fisher Equation (-5) np.mean((dydt_pred-f_pred)**2)+(1/2)*(pre_1-0.0758582)**2+(1/2)*(pre_2-0.0350519)**2
     # Huxley Equation (-2)  +(1/2)*(pre_1-0.19557)**2+(1/2)*(pre_2-0.111244)**2
     # Huxley Equation (-2)  np.mean((dydt_pred-f_pred)**2)+(1/2)*(pre_1-0.19557)**2+(1/2)*(pre_2-0.111244)**2
+
     def loss_wrap(self, flattened_params):
         params_list = self.unflat_func(flattened_params)
         return self.loss_func(params_list)
 
+# Training process  BFGS optimization algorithm
     def train(self, method='BFGS', maxiter=2000, iprint=200):
         self.x = []
 
@@ -158,7 +158,7 @@ class NNSolver(object):
         self.params_list = self.unflat_func(opt.x)
 
 
-
+# Define the network solution \hat{u}
     def predict(self, t=None, params_list=None):
         if t is None:
             t = self.t
@@ -192,7 +192,7 @@ class NNSolver(object):
                                predict3(params_list[2], t).squeeze()]
             return y_pred_list
 
-
+# Animation Show
     def result(self,t = None, anim = False, interval = 50, every_n_iter = 1):
         if t is None:
             t = self.t
@@ -252,6 +252,7 @@ class NNSolver(object):
 
             return anim_pred
 
+# Define the loss function and iteration count image
     def plot_loss(self):
         plt.figure(figsize=(8,6))
         plt.semilogy(range(len(loss_arr)), loss_arr, label="BFGS")
